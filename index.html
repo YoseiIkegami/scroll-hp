@@ -325,11 +325,41 @@ const frag = `
     return s*max(0.0,1.0-y*0.9);}
 
   // ─── 三日月 SDF ────────────────────────────────────────────
-  // 大円の内側 かつ 小円(shift分ずれた)の外側 = 三日月
   float crescentMask(vec2 uvA,vec2 center,float r1,float r2,vec2 shift){
     float d1=r1-length(uvA-center);
     float d2=length(uvA-(center+shift))-r2;
     return smoothstep(-0.003,0.003,d1)*smoothstep(-0.003,0.003,d2);}
+
+  // ─── 泡 5層レンダリング ────────────────────────────────────
+  // ガラス球の質感: リム + 内側青み + ハイライト×2 + 底部シャドウ
+  vec3 drawBubble(vec2 uvA,vec2 center,float r,float bt,float seed){
+    vec2 d=uvA-center;
+    // ゆらぎ: 横幅をsin波で微妙に変える
+    float wobble=1.0+0.06*sin(bt*3.5+seed*4.1);
+    d.x/=wobble;
+    float dist=length(d);
+    // Layer1: 外縁リム
+    float dr=dist-r;
+    float rim=exp(-(dr*dr)/(0.003*0.003));
+    vec3 col=vec3(0.55,0.82,1.00)*rim*0.85;
+    // Layer2: 内側 (微かな青み)
+    float inside=1.0-smoothstep(r-0.006,r,dist);
+    col+=vec3(0.04,0.12,0.28)*inside*0.08;
+    // Layer3: 左上ハイライト (光の反射)
+    vec2 hOff=vec2(-0.35,0.40)*r;
+    float hd=length(d-hOff);
+    float hl=1.0-smoothstep(0.0,r*0.28,hd);
+    col+=vec3(0.90,0.95,1.00)*hl*0.75;
+    // Layer4: 右下副ハイライト
+    vec2 h2Off=vec2(0.28,-0.30)*r;
+    float h2d=length(d-h2Off);
+    float h2=1.0-smoothstep(0.0,r*0.12,h2d);
+    col+=vec3(0.70,0.88,1.00)*h2*0.25;
+    // Layer5: 底部シャドウ
+    float sa=dot(d/max(dist,0.0001),vec2(0.0,-1.0));
+    col-=vec3(0.0,0.05,0.10)*inside*max(0.0,sa)*0.12;
+    float alpha=rim*0.9+inside*0.07+hl*0.8+h2*0.3;
+    return col*alpha;}
 
   // ─── 星 ────────────────────────────────────────────────────
   float starLayer(vec2 uv,float scale,float thresh,float t){
@@ -345,42 +375,51 @@ const frag = `
     vec2 uv=vUv;
     float asp=u_resolution.x/u_resolution.y;
     vec2 uvA=vec2(uv.x*asp,uv.y);
-    float t=u_time*0.45,p=u_progress;
+    float t=u_time*0.45,p=u_progress; // p はJS側でeased済み
 
-    // ─── depth マッピング ─────────────────────────────────
-    // p=0.00→0.35: 降下 (0→1)
-    // p=0.35→0.75: 深海に留まる (1)
-    // p=0.75→1.00: 浮上 (1→0)
+    // ─── depth マッピング (eased p 基準) ─────────────────
+    // p<0.10: depth=0 (カメラ降下前は海なし)
+    // p=0.10→0.35: 降下 (0→1)
+    // p=0.35→0.76: 深海 (1)
+    // p=0.76→1.00: 浮上 (1→0)
     float depth;
-    if(p<0.35)       depth=p/0.35;
-    else if(p<0.75)  depth=1.0;
-    else             depth=1.0-(p-0.75)/0.25;
+    if(p<0.10)       depth=0.0;
+    else if(p<0.35)  depth=(p-0.10)/0.25;
+    else if(p<0.76)  depth=1.0;
+    else             depth=1.0-(p-0.76)/0.24;
     depth=clamp(depth,0.0,1.0);
 
-    // ─── 水面 ─────────────────────────────────────────────
-    float horizY=0.06+depth*1.04;
+    // ─── カメラ降下 + 水面 ───────────────────────────────
+    // p=0.00〜0.10: 海は画面外。p=0.10〜0.22でカメラが下がり海面出現。
+    float camDesc=smoothstep(0.10,0.22,p);
+    float horizY=-0.15+camDesc*0.21+depth*1.04;
     float ripple=wave(uv.x*asp,t);
     float waveY=horizY+ripple;
     float dAbove=uv.y-waveY,dBelow=waveY-uv.y;
 
-    // ─── 三日月 ───────────────────────────────────────────
-    // depth=0: 月は高位置(y=0.90)
-    // depth≈0.56: 月が水面に到達(p≈0.20), 以後水没
-    // depth=0.56→1.0: waveY > moonY なので moonAbove=0
-    float moonY     = 0.90-depth*0.46;
-    vec2  moonCenter= vec2(asp*0.62,moonY);
-    float moonR1    = 0.080;
-    float moonR2    = 0.064;
-    vec2  moonShift = vec2(0.025,0.005);
-    float moonDist  = length(uvA-moonCenter);
-    float moonMask  = crescentMask(uvA,moonCenter,moonR1,moonR2,moonShift);
-    float moonGlow1 = exp(-moonDist*moonDist/(0.030*0.030))*0.52;
-    float moonGlow2 = exp(-moonDist*moonDist/(0.150*0.150))*0.09;
-    // 水面より上のピクセルのみ月を表示
-    float moonAbove = smoothstep(0.0,0.04,moonY-waveY);
-    vec3  moonColor = vec3(0.96,0.91,0.69);
+    // ─── burstFactor (早めに宣言: caustic等で使用) ───────
+    float burstFactor=smoothstep(0.76,0.80,p)*(1.0-smoothstep(0.92,0.96,p));
 
-    // ─── 星空 ─────────────────────────────────────────────
+    // ─── 三日月 ─────────────────────────────────────────
+    float moonY    =0.90-depth*0.46;
+    vec2  moonCenter=vec2(asp*0.62,moonY);
+    float moonR1   =0.080,moonR2=0.064;
+    vec2  moonShift=vec2(0.025,0.005);
+    float moonDist =length(uvA-moonCenter);
+    float moonMask =crescentMask(uvA,moonCenter,moonR1,moonR2,moonShift);
+    float moonGlow1=exp(-moonDist*moonDist/(0.030*0.030))*0.52;
+    float moonGlow2=exp(-moonDist*moonDist/(0.150*0.150))*0.09;
+    float moonAbove=smoothstep(0.0,0.04,moonY-waveY);
+    vec3  moonColor=vec3(0.96,0.91,0.69);
+
+    // ─── 帰還時: 星の輝度ブースト ────────────────────────
+    // p=0.90〜0.95で急上昇, 0.95〜1.00で通常輝度に戻す
+    float starBright=1.0;
+    {float bt=clamp((p-0.90)/0.05,0.0,1.0);
+     float fd=clamp((p-0.95)/0.05,0.0,1.0);
+     starBright=1.0+bt*2.0*(1.0-fd);}
+
+    // ─── 星空 ───────────────────────────────────────────
     vec3 skyTop  =vec3(0.012,0.022,0.090);
     vec3 skyHoriz=vec3(0.030,0.070,0.210);
     vec3 skyBg   =mix(skyTop,skyHoriz,(1.0-uv.y)*(1.0-uv.y));
@@ -390,14 +429,11 @@ const frag = `
     {vec2 sid=floor(uvA*11.0);starField+=starColor(sid,starLayer(uvA,11.0,0.91,t))*1.25;}
     {vec2 sid=floor(uvA*24.0);starField+=starColor(sid,starLayer(uvA,24.0,0.87,t))*0.80;}
     starField+=vec3(0.65,0.75,1.00)*starLayer(uvA,48.0,0.82,t)*0.42;
-    // 天空に月を合成
+    starField*=starBright;
     vec3 sky=skyBg+starField;
-    sky+=(moonColor*moonMask*1.35
-         +moonColor*moonGlow1
-         +moonColor*0.55*moonGlow2)*moonAbove;
+    sky+=(moonColor*moonMask*1.35+moonColor*moonGlow1+moonColor*0.55*moonGlow2)*moonAbove;
 
-    // ─── 水中グラデーション ────────────────────────────────
-    // 浅瀬→中層→深海→深淵 の4段階 + depth で全体を暗転
+    // ─── 水中グラデーション ──────────────────────────────
     float wDepth=clamp(dBelow/0.85,0.0,1.0);
     vec3 wShallow=vec3(0.020,0.180,0.350);
     vec3 wMid    =vec3(0.010,0.060,0.180);
@@ -407,73 +443,83 @@ const frag = `
     if(wDepth<0.35)      waterCol=mix(wShallow,wMid,   wDepth/0.35);
     else if(wDepth<0.65) waterCol=mix(wMid,    wDeep,  (wDepth-0.35)/0.30);
     else                 waterCol=mix(wDeep,   wAbyss, (wDepth-0.65)/0.35);
-    // 深海フェーズで暗転
     waterCol*=mix(1.0,0.14,clamp((depth-0.55)/0.45,0.0,1.0));
-    // caustic
+    // caustic: burst中は時間係数を3.9倍まで加速
+    float causticT=t*1.3*(1.0+burstFactor*2.0);
     float cFade=max(0.0,1.0-wDepth*2.8);
-    waterCol+=vec3(0.045,0.145,0.220)*caustic(uvA*0.55,t*1.3)*cFade*0.60;
-    // 光のシャフト
+    waterCol+=vec3(0.045,0.145,0.220)*caustic(uvA*0.55,causticT)*cFade*0.60;
     float lsFade=max(0.0,1.0-wDepth*2.0);
     waterCol+=vec3(0.030,0.100,0.180)*lightShafts(uv.x,wDepth,t)*lsFade;
 
-    // ─── 泡: 通常 (p=0.38〜0.80) ─────────────────────────
-    float bubbleFactor=smoothstep(0.38,0.43,p)*(1.0-smoothstep(0.78,0.83,p));
-    float bubbles=0.0;
-    for(int i=0;i<16;i++){
-      float fi=float(i),sd=fi*13.7+5.3;
-      float xb=hash1(sd)*0.85+0.075;
-      float spd=0.05+hash1(sd+1.0)*0.08;
-      float ph=hash1(sd+2.0)*6.283;
-      float r=0.005+hash1(sd+3.0)*0.018;
-      float yp=fract(hash1(sd+4.0)+t*spd);
-      float xp=xb+sin(t*1.5+ph)*0.025;
-      float d=length(uvA-vec2(xp*asp,yp));
-      float dr=d-r;
-      float ring=exp(-(dr*dr)*2500.0);
-      float fd=smoothstep(0.0,0.08,yp)*smoothstep(1.0,0.85,yp);
-      bubbles+=ring*fd;}
-    waterCol+=vec3(0.50,0.78,1.00)*clamp(bubbles*bubbleFactor,0.0,2.5)*0.35;
+    // ─── 浮上モーションブラー ────────────────────────────
+    // burstFactor>0時、y方向に5点サンプル→縦に伸びるブラー
+    if(burstFactor>0.01){
+      float blurStr=burstFactor*0.04;
+      vec3 blurSum=waterCol;
+      for(int si=1;si<5;si++){
+        float fy=float(si);
+        float yShift=-fy*blurStr;  // 下方向トレール
+        float wD2=clamp((waveY-(uv.y+yShift))/0.85,0.0,1.0);
+        float dk=mix(1.0,0.14,clamp((depth-0.55)/0.45,0.0,1.0));
+        vec3 ws;
+        if(wD2<0.35)      ws=mix(wShallow,wMid,   wD2/0.35);
+        else if(wD2<0.65) ws=mix(wMid,    wDeep,  (wD2-0.35)/0.30);
+        else              ws=mix(wDeep,   wAbyss, (wD2-0.65)/0.35);
+        blurSum+=ws*dk;}
+      waterCol=mix(waterCol,blurSum/5.0,burstFactor*0.55);
+      // スクリーンフラッシュ
+      waterCol+=vec3(0.06)*burstFactor;}
 
-    // ─── 泡: バースト (p=0.78〜0.90) ─────────────────────
-    // 一気に浮上する大量の泡、速度3〜4倍、大小混在
-    float burstFactor=smoothstep(0.78,0.82,p)*(1.0-smoothstep(0.88,0.92,p));
-    float burstBubbles=0.0;
-    for(int i=0;i<48;i++){
-      float fi=float(i),sd=fi*7.3+91.1;
-      float xb=hash1(sd)*0.90+0.05;
-      float spd=0.18+hash1(sd+1.0)*0.25;
-      float ph=hash1(sd+2.0)*6.283;
-      float r=0.003+hash1(sd+3.0)*0.025;
-      float yp=fract(hash1(sd+4.0)+t*spd);
-      float xp=xb+sin(t*2.0+ph)*0.035;
-      float d=length(uvA-vec2(xp*asp,yp));
-      float dr=d-r;
-      float ring=exp(-(dr*dr)*3333.0);
-      float fd=smoothstep(0.0,0.08,yp)*smoothstep(1.0,0.80,yp);
-      burstBubbles+=ring*fd;}
-    waterCol+=vec3(0.55,0.82,1.00)*clamp(burstBubbles*burstFactor,0.0,5.0)*0.40;
+    // ─── 泡: 通常 18個 (p=0.35〜0.78) ──────────────────
+    float bubbleFactor=smoothstep(0.35,0.42,p)*(1.0-smoothstep(0.74,0.78,p));
+    if(bubbleFactor>0.01){
+      for(int i=0;i<18;i++){
+        float fi=float(i),sd=fi*13.7+5.3;
+        float xb=hash1(sd)*0.85+0.075;
+        float spd=0.04+hash1(sd+1.0)*0.03;
+        float r=0.008+hash1(sd+3.0)*0.018;
+        float yp=fract(hash1(sd+4.0)+t*spd);
+        float xp=(xb+sin(t*2.1+sd*3.7)*0.015)*asp;
+        float fd=smoothstep(0.0,0.08,yp)*smoothstep(1.0,0.85,yp);
+        waterCol+=drawBubble(uvA,vec2(xp,yp),r,t,sd)*fd*bubbleFactor;}}
 
-    // ─── 水面突入スプラッシュ (p=0.33〜0.44) ─────────────
-    float splashF=smoothstep(0.33,0.37,p)*(1.0-smoothstep(0.40,0.44,p));
-    float splash=0.0;
-    for(int i=0;i<20;i++){
-      float fi=float(i),sd=fi*17.3+43.7;
-      float xp=hash1(sd)*asp;
-      float yp=horizY-hash1(sd+1.0)*0.12;
-      float r2=0.004+hash1(sd+2.0)*0.012;
-      float an=0.5+0.5*sin(t*(2.0+hash1(sd+3.0)*3.0)+sd);
-      float d=length(uvA-vec2(xp,yp));
-      splash+=exp(-(d*d)/(r2*r2))*an;}
-    waterCol+=vec3(0.72,0.88,1.00)*clamp(splash*splashF,0.0,2.0)*0.45;
-    sky     +=vec3(0.72,0.88,1.00)*clamp(splash*splashF,0.0,2.0)*0.22;
+    // ─── 泡: バースト 45個 (p=0.76〜0.96) ──────────────
+    // burstFactor<0.01は計算スキップ
+    if(burstFactor>0.01){
+      for(int i=0;i<45;i++){
+        float fi=float(i),sd=fi*7.3+91.1;
+        float xb=hash1(sd)*0.90+0.05;
+        float spd=0.18+hash1(sd+1.0)*0.25; // 通常の4〜5倍速
+        float ph=hash1(sd+2.0)*6.283;
+        float r=0.005+hash1(sd+3.0)*0.030; // 大小混在
+        float yp=fract(hash1(sd+4.0)+t*spd);
+        float xp=(xb+sin(t*2.5+ph)*0.05)*asp;
+        float fd=smoothstep(0.0,0.06,yp)*smoothstep(1.0,0.75,yp);
+        waterCol+=drawBubble(uvA,vec2(xp,yp),r,t,sd)*fd*burstFactor;}}
 
-    // ─── 深海魚の目 (p=0.60〜0.80) ───────────────────────
-    float eyeFactor=smoothstep(0.60,0.67,p)*(1.0-smoothstep(0.75,0.82,p));
-    // ゆっくり上下にゆれ、周期8〜12秒で瞬き
-    float blink    =0.5+0.5*sin(t*0.38+1.5);
-    float eyeSwayY =sin(t*0.22+0.7)*0.032;
-    vec2  eyeL=vec2(asp*0.55,0.30+eyeSwayY);
-    vec2  eyeR=vec2(asp*0.68,0.30+eyeSwayY);
+    // ─── 水面突入スプラッシュ (p=0.33〜0.42) ────────────
+    float splashF=smoothstep(0.33,0.37,p)*(1.0-smoothstep(0.38,0.42,p));
+    if(splashF>0.01){
+      for(int i=0;i<20;i++){
+        float fi=float(i),sd=fi*17.3+43.7;
+        float xp=hash1(sd)*asp;
+        float yp=horizY-hash1(sd+1.0)*0.10;
+        float r2=0.004+hash1(sd+2.0)*0.012;
+        float an=0.5+0.5*sin(t*(2.0+hash1(sd+3.0)*3.0)+sd);
+        float d=length(uvA-vec2(xp,yp));
+        float s=exp(-(d*d)/(r2*r2))*an;
+        waterCol+=vec3(0.72,0.88,1.00)*s*splashF*0.45;
+        sky     +=vec3(0.72,0.88,1.00)*s*splashF*0.22;}}
+
+    // ─── 深海魚の目 (p=0.60〜0.80) ─────────────────────
+    float eyeFactor=smoothstep(0.60,0.68,p)*(1.0-smoothstep(0.74,0.80,p));
+    // 周期~15秒でたまに瞬き (90%以上の時間は開いている)
+    float blinkRaw=sin(t*0.93+1.5);
+    float blink   =smoothstep(-0.9,-0.7,blinkRaw);
+    float eyeSwayY=sin(t*0.22+0.7)*0.032;
+    // 目の間隔を広げ大きな生物感を出す
+    vec2  eyeL=vec2(asp*0.48,0.30+eyeSwayY);
+    vec2  eyeR=vec2(asp*0.72,0.30+eyeSwayY);
     float eyeR0=0.022;
     float dEL=length(uvA-eyeL);
     float dER=length(uvA-eyeR);
@@ -485,7 +531,11 @@ const frag = `
     float glowL=exp(-dEL*dEL/(0.065*0.065));
     float glowR=exp(-dER*dER/(0.065*0.065));
     waterCol+=vec3(0.18,0.42,0.06)*(glowL+glowR)*blink*eyeFactor*0.45;
-    // 瞳孔: 縦長楕円SDF (y方向を 0.35倍に潰す)
+    // 顔の輪郭を暗示する楕円形の薄い影
+    vec2 faceCtrUV=vec2(0.60,0.30+eyeSwayY); // uv座標で目の中心
+    float faceShadow=exp(-pow(length(uv-faceCtrUV)/0.18,2.0))*0.04;
+    waterCol-=vec3(0.0,0.05,0.08)*faceShadow*eyeFactor;
+    // 瞳孔 (縦長楕円)
     vec2 pOL=uvA-eyeL; pOL.y*=0.35;
     vec2 pOR=uvA-eyeR; pOR.y*=0.35;
     float pR=0.010;
@@ -493,18 +543,15 @@ const frag = `
     float pMR=1.0-smoothstep(pR*0.80,pR*1.20,length(pOR));
     waterCol*=1.0-(pML+pMR)*eyeFactor*blink*0.88;
 
-    // ─── 映り込み ─────────────────────────────────────────
-    // 水面が近い(depth小)ときのみ映り込みを表示
+    // ─── 映り込み ───────────────────────────────────────
     float reflStrength=clamp(1.0-depth*3.0,0.0,1.0);
     if(reflStrength>0.005){
       float warpX=wave(uv.x*asp+0.5,t*1.3)*4.5+wave(uv.x*asp*1.7,t*0.7)*2.0;
       vec2 reflUVA=vec2(uvA.x+warpX,waveY*2.0-uvA.y);
-      // 星の映り込み
       float rS=starLayer(reflUVA,11.0,0.91,t)*1.25
               +starLayer(reflUVA,24.0,0.87,t)*0.80
               +starLayer(reflUVA,48.0,0.82,t)*0.32;
       waterCol+=vec3(0.55,0.72,1.00)*rS*reflStrength*exp(-dBelow*12.0)*0.48;
-      // 月の映り込み (waveYを軸に反転した位置に月を描画)
       vec2  reflMoonC=vec2(moonCenter.x,waveY*2.0-moonCenter.y);
       float reflMoonM=crescentMask(reflUVA,reflMoonC,moonR1,moonR2,moonShift);
       float reflMoonD=length(reflUVA-reflMoonC);
@@ -512,11 +559,15 @@ const frag = `
       waterCol+=(moonColor*reflMoonM*0.55+moonColor*reflMoonG)
                *reflStrength*exp(-dBelow*8.0)*moonAbove;}
 
-    // ─── 合成 ─────────────────────────────────────────────
+    // ─── 合成 ───────────────────────────────────────────
     vec3 col=mix(waterCol,sky,smoothstep(-0.006,0.006,dAbove));
-    // 水面グロー
+    // 水面の表面張力輝き (水面線±0.008の細い光帯)
+    float surfTension=exp(-abs(uv.y-waveY)*180.0)*0.45;
+    col+=vec3(0.6,0.9,1.0)*surfTension*(1.0-depth*0.7);
+    // 水面グロー: burst中は3倍
+    float hGlowMult=1.0+burstFactor*2.0;
     float hGlow=exp(-abs(dAbove)*55.0);
-    col=mix(col,vec3(0.05,0.36,0.54),hGlow*0.35*(1.0-depth*0.60));
+    col=mix(col,vec3(0.05,0.36,0.54),hGlow*0.35*hGlowMult*(1.0-depth*0.60));
     // 帰還時: 星を強調
     col+=starField*max(0.0,p-0.88)/0.12*0.28;
     // ビネット
@@ -535,19 +586,30 @@ window.addEventListener('resize', () => {
 });
 
 // ════════════════════════════════════════════════════════════
-//  仮想スクロール (Virtual Scroll)
+//  可変速度スクロール
 //
-//  ★ 無限ループの仕組み:
-//    vScroll は 0 から永遠に増え続ける数値。
-//    progress = (vScroll / CYCLE) % 1.0 で 0〜1 に折り返す。
-//    シェーダーは p=0 と p=1 で同じ視覚 (星空・depth=0) を返すので
-//    折り返しの瞬間に見た目の切れ目が一切生じない。
+//  rawProgress (ホイール積算 % 1) を easedProgress に変換する。
+//  rawの幅が広い = スクロールが重い (テキストを読む時間)
+//  rawの幅が狭い = スクロールが速い (アニメーション遷移)
 // ════════════════════════════════════════════════════════════
-const CYCLE = 7000;   // ホイール1回転分のdeltaY合計でちょうど1周になるよう調整
-const LERP  = 0.040;  // 慣性係数 (小さいほど重く高級感がある)
+function remap(v, a, b, c, d) {
+  return c + (v - a) / (b - a) * (d - c);
+}
+function easedProgress(raw) {
+  if (raw < 0.22) return remap(raw, 0.00, 0.22, 0.00, 0.10); // 星空・ヒーロー (重い)
+  if (raw < 0.32) return remap(raw, 0.22, 0.32, 0.10, 0.22); // 月が降りてくる
+  if (raw < 0.38) return remap(raw, 0.32, 0.38, 0.22, 0.35); // 水面突入 (速い)
+  if (raw < 0.72) return remap(raw, 0.38, 0.72, 0.35, 0.70); // 水中テキスト群 (重い)
+  if (raw < 0.82) return remap(raw, 0.72, 0.82, 0.70, 0.76); // 深海 (非常に重い)
+  if (raw < 0.88) return remap(raw, 0.82, 0.88, 0.76, 0.95); // 浮上バースト (一気に速い)
+  return           remap(raw, 0.88, 1.00, 0.95, 1.00);        // 帰還・着地 (重い)
+}
 
-let vScroll  = 0;     // 目標の仮想スクロール量 (0 to Infinity)
-let vSmooth  = 0;     // lerp後の滑らかな値
+const CYCLE = 7000;
+const LERP  = 0.040;
+
+let vScroll = 0;
+let vSmooth = 0;
 
 // ── マウスホイール ──────────────────────────────────────────
 window.addEventListener('wheel', (e) => {
@@ -575,36 +637,14 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ════════════════════════════════════════════════════════════
-//  テキスト透明度マップ
-//
-//  ★ 無限ループ対応の opacity 計算:
-//    progress が 0〜1 を循環するため、
-//    各テキストグループが「いつ表示されるか」を
-//    progress の範囲 (show, peak, hide) で定義する。
-//
-//    ヒーローテキスト (g-hero) は progress ≈ 0 と ≈ 1 の両側で
-//    表示されるため、±1 のシフトを確認して max を取る。
+//  テキスト透明度 (eased progress 基準)
 // ════════════════════════════════════════════════════════════
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  fade with HOLD
-//
-//  show ─── フェードイン開始
-//  peakIn ─ フェードイン完了 (opacity = 1.0 に達する)
-//  peakOut ─ フェードアウト開始 (ここまで opacity = 1.0 を保持)
-//  hide ─── フェードアウト完了 (opacity = 0)
-//
-//  [show → peakIn]: 0 → 1  (フェードイン)
-//  [peakIn → peakOut]: 1.0  (ホールド ← 今回追加)
-//  [peakOut → hide]: 1 → 0  (フェードアウト)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function fade(p, show, peakIn, peakOut, hide) {
   if (p <= show || p >= hide) return 0;
   if (p <= peakIn)  return (p - show) / (peakIn - show);
   if (p <= peakOut) return 1.0;
   return 1 - (p - peakOut) / (hide - peakOut);
 }
-
-// ループ境界 (0/1) をまたぐ要素用
 function fadeCycle(p, show, peakIn, peakOut, hide) {
   return Math.max(
     fade(p,     show, peakIn, peakOut, hide),
@@ -613,41 +653,16 @@ function fadeCycle(p, show, peakIn, peakOut, hide) {
   );
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  テキストグループ タイムライン
-//
-//  [show, peakIn, peakOut, hide] — 全て progress 0〜1 の値
-//
-//  ヒーローは peakOut を広めに設定し「トップに留まる感」を出す。
-//  各なぜセクションも peakIn→peakOut を十分取り、
-//  読み終わるまで表示を保つ。
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const TEXT_GROUPS = [
-  //                             show   peakIn  peakOut  hide
-  // ヒーロー: ループ両端に登場。ホールドを特に広く。
-  { id: 'g-hero',    fn: (p) => fadeCycle(p, -0.06, 0.00, 0.17, 0.22) },
-
-  // 水面
-  { id: 'g-surface', fn: (p) => fade(p,  0.18,  0.23,  0.31,  0.36) },
-
-  // なぜ 1 (左)
-  { id: 'g-why1',    fn: (p) => fade(p,  0.31,  0.36,  0.47,  0.52) },
-
-  // なぜ 2 (右) — why1 と位置が違うので overlap OK
-  { id: 'g-why2',    fn: (p) => fade(p,  0.46,  0.51,  0.61,  0.66) },
-
-  // なぜ 3 (左) — why2 と位置が違うので overlap OK
-  { id: 'g-why3',    fn: (p) => fade(p,  0.60,  0.65,  0.74,  0.79) },
-
-  // 深海テキスト (中央) — 深海滞在中ずっと。最も長いホールド。
-  // why2/why3 と位置が違う (center vs left/right) ので overlap OK
-  { id: 'g-deep',    fn: (p) => fade(p,  0.50,  0.56,  0.76,  0.82) },
-
-  // 帰還
-  { id: 'g-return',  fn: (p) => fade(p,  0.80,  0.85,  0.95,  1.00) },
+  { id: 'g-hero',    fn: (p) => fadeCycle(p, -0.06, 0.00, 0.09, 0.13) },
+  { id: 'g-surface', fn: (p) => fade(p,  0.18,  0.22,  0.30,  0.34) },
+  { id: 'g-why1',    fn: (p) => fade(p,  0.36,  0.40,  0.50,  0.54) },
+  { id: 'g-why2',    fn: (p) => fade(p,  0.50,  0.54,  0.62,  0.66) },
+  { id: 'g-why3',    fn: (p) => fade(p,  0.60,  0.64,  0.72,  0.76) },
+  { id: 'g-deep',    fn: (p) => fade(p,  0.52,  0.57,  0.74,  0.78) },
+  { id: 'g-return',  fn: (p) => fade(p,  0.92,  0.95,  0.99,  1.02) },
 ];
 
-// DOM要素をキャッシュ
 const groupEls = TEXT_GROUPS.map(g => ({
   el: document.getElementById(g.id),
   fn: g.fn
@@ -655,12 +670,13 @@ const groupEls = TEXT_GROUPS.map(g => ({
 
 // ── フェーズ名 ───────────────────────────────────────────
 const PHASES = [
-  { until: 0.20, label: '夜空' },
+  { until: 0.10, label: '夜空' },
+  { until: 0.22, label: '降下' },
   { until: 0.35, label: '水面へ' },
   { until: 0.45, label: '突入' },
-  { until: 0.65, label: '水中' },
-  { until: 0.78, label: '深海' },
-  { until: 0.90, label: '浮上' },
+  { until: 0.70, label: '水中' },
+  { until: 0.80, label: '深海' },
+  { until: 0.96, label: '浮上' },
   { until: 1.00, label: '夜空' },
 ];
 const phaseLabel = document.getElementById('phase-label');
@@ -672,51 +688,45 @@ let lastPhase = '';
 
 function getPhaseLabel(p) {
   for (const ph of PHASES) if (p < ph.until) return ph.label;
-  return '星空';
+  return '夜空';
 }
 
-// depth 計算 (シェーダーと同じロジック)
+// depth計算 (シェーダーと同じロジック)
 function getDepth(p) {
-  if (p < 0.35) return p / 0.35;
-  if (p < 0.75) return 1.0;
-  return 1.0 - (p - 0.75) / 0.25;
+  if (p < 0.10) return 0;
+  if (p < 0.35) return (p - 0.10) / 0.25;
+  if (p < 0.76) return 1.0;
+  return 1.0 - (p - 0.76) / 0.24;
 }
 
-// ── アイドル検知 (スクロールヒントの表示) ──────────────
+// ── アイドル検知 ─────────────────────────────────────────
 let idleTimer;
 function resetIdleTimer() {
   scrollHint.style.opacity = '0';
   clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => {
-    scrollHint.style.opacity = '1';
-  }, 3500);
+  idleTimer = setTimeout(() => { scrollHint.style.opacity = '1'; }, 3500);
 }
 
 // ════════════════════════════════════════════════════════════
 //  RAF ループ
-//  毎フレーム: lerp → progress → シェーダー + テキスト更新
 // ════════════════════════════════════════════════════════════
 function tick(ms) {
-  // lerp: vSmoothをvScrollに近づける (慣性の実装)
   vSmooth += (vScroll - vSmooth) * LERP;
 
-  // 0〜1 に正規化 (modulo)
+  // rawProgress → easedProgress に変換してシェーダー/テキストに渡す
   const raw      = vSmooth / CYCLE;
-  const progress = raw - Math.floor(raw);  // 常に 0.0〜1.0
+  const rawProg  = raw - Math.floor(raw);
+  const progress = easedProgress(rawProg);
 
-  // シェーダーに渡す
   uniforms.u_time.value     = ms * 0.001;
   uniforms.u_progress.value = progress;
 
-  // テキストグループの opacity 更新
   groupEls.forEach(({ el, fn }) => {
     const op = fn(progress);
-    // blur も opacity に連動させる
     el.style.opacity = op;
     el.style.filter  = op < 0.99 ? `blur(${(1 - op) * 9}px)` : 'none';
   });
 
-  // 深度インジケーター
   const depth = getDepth(progress);
   depthFill.style.height = (depth * 100).toFixed(1) + '%';
 
@@ -726,22 +736,16 @@ function tick(ms) {
     lastPhase = phase;
   }
 
-  // インジケーターの表示 (星空以外で表示)
-  const showUI = depth > 0.04;
-  depthUI.classList.toggle('visible', showUI);
+  depthUI.classList.toggle('visible', depth > 0.04);
 
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
 
 // ── 初期化 ──────────────────────────────────────────────────
-// ヒーローテキストを最初から表示
 document.getElementById('g-hero').style.opacity = '1';
 document.getElementById('g-hero').style.filter  = 'none';
-
-// スクロールヒント: 最初は3秒後に表示
 setTimeout(() => { scrollHint.style.opacity = '1'; }, 3500);
-
 requestAnimationFrame(tick);
 </script>
 </body>
