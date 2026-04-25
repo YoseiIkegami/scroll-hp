@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Yose — 耀星</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@200;300&family=Cormorant+Garamond:ital,wght@0,300;1,300&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;          /* ← スクロールバーを消す。仮想スクロールを使う */
+      background: #040A1A;
+      cursor: default;
+    }
+
+    #c {
+      position: fixed;
+      inset: 0;
+      width: 100%; height: 100%;
+      z-index: 0;
+    }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       テキストグループ
+       全て position:fixed — スクロールとは独立して存在する
+       opacity と blur は JavaScript が毎フレーム更新する
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .tg {
+      position: fixed;
+      left: 10vw;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 20;
+      pointer-events: none;
+      opacity: 0;
+      will-change: opacity, filter;
+    }
+    .tg.center {
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+    }
+    .tg.right {
+      left: auto;
+      right: 10vw;
+      text-align: right;
+      transform: translateY(-50%);
+    }
+
+    /* タイポグラフィ */
+    .name-jp {
+      font-family: 'Noto Serif JP', serif;
+      font-weight: 200;
+      font-size: clamp(4rem, 11vw, 8.5rem);
+      color: rgba(225, 215, 195, 0.90);
+      letter-spacing: 0.15em;
+      line-height: 1;
+    }
+    .name-en {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-style: italic;
+      font-size: clamp(0.82rem, 1.8vw, 1.1rem);
+      color: rgba(165, 190, 225, 0.60);
+      letter-spacing: 0.5em;
+      margin-top: 1.8rem;
+    }
+    .tagline {
+      font-family: 'Noto Serif JP', serif;
+      font-weight: 200;
+      font-size: clamp(0.68rem, 1.3vw, 0.85rem);
+      color: rgba(140, 170, 210, 0.45);
+      letter-spacing: 0.3em;
+      line-height: 3;
+      margin-top: 2.5rem;
+    }
+    .surface-text {
+      font-family: 'Noto Serif JP', serif;
+      font-weight: 200;
+      font-size: clamp(0.78rem, 1.5vw, 0.95rem);
+      color: rgba(160, 200, 225, 0.72);
+      letter-spacing: 0.35em;
+      line-height: 3.5;
+    }
+    .question {
+      font-family: 'Noto Serif JP', serif;
+      font-weight: 200;
+      font-size: clamp(0.95rem, 2vw, 1.3rem);
+      color: rgba(130, 180, 205, 0.85);
+      letter-spacing: 0.25em;
+      line-height: 2.2;
+      margin-bottom: 2.5rem;
+    }
+    .answer {
+      font-family: 'Noto Serif JP', serif;
+      font-weight: 200;
+      font-size: clamp(0.70rem, 1.2vw, 0.84rem);
+      color: rgba(110, 155, 180, 0.60);
+      letter-spacing: 0.2em;
+      line-height: 3.8;
+    }
+    .deep-text {
+      font-family: 'Noto Serif JP', serif;
+      font-weight: 200;
+      font-size: clamp(0.78rem, 1.4vw, 0.92rem);
+      color: rgba(75, 135, 165, 0.72);
+      letter-spacing: 0.4em;
+      line-height: 5;
+    }
+    .return-title {
+      font-family: 'Noto Serif JP', serif;
+      font-weight: 200;
+      font-size: clamp(1.1rem, 2.8vw, 1.9rem);
+      color: rgba(205, 215, 235, 0.88);
+      letter-spacing: 0.2em;
+      line-height: 2.2;
+      margin-bottom: 3.5rem;
+    }
+    .contact-link {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: clamp(0.75rem, 1.4vw, 0.9rem);
+      letter-spacing: 0.4em;
+      color: rgba(145, 185, 215, 0.65);
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 1.4rem;
+      pointer-events: auto;
+      transition: color 0.4s, gap 0.4s;
+    }
+    .contact-link::before {
+      content: '';
+      width: 2.2rem; height: 1px;
+      background: currentColor;
+      flex-shrink: 0;
+      transition: width 0.4s;
+    }
+    .contact-link:hover { color: rgba(195, 220, 245, 0.9); gap: 2rem; }
+    .contact-link:hover::before { width: 3.5rem; }
+
+    /* ── 深度インジケーター ── */
+    #depth-ui {
+      position: fixed;
+      right: 2.8rem;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.6rem;
+      opacity: 0;
+      transition: opacity 0.8s;
+    }
+    #depth-ui.visible { opacity: 1; }
+    #depth-track {
+      width: 1px;
+      height: 80px;
+      background: rgba(130, 170, 210, 0.12);
+      position: relative;
+    }
+    #depth-fill {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 0%;
+      background: rgba(130, 170, 210, 0.50);
+    }
+    #phase-label {
+      font-family: 'Noto Serif JP', serif;
+      font-size: 0.55rem;
+      letter-spacing: 0.3em;
+      color: rgba(130, 170, 210, 0.45);
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      margin-top: 0.5rem;
+    }
+
+    /* ── スクロールヒント ── */
+    #scroll-hint {
+      position: fixed;
+      bottom: 3rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 30;
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 0.68rem;
+      letter-spacing: 0.45em;
+      color: rgba(150, 185, 215, 0.45);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.8rem;
+      transition: opacity 0.8s;
+    }
+    #scroll-hint-line {
+      width: 1px;
+      height: 2.5rem;
+      background: rgba(150, 185, 215, 0.3);
+      animation: hint-drip 2s ease-in-out infinite;
+      transform-origin: top;
+    }
+    @keyframes hint-drip {
+      0%,100% { transform: scaleY(0.3); opacity: 0.3; }
+      50%      { transform: scaleY(1.0); opacity: 0.7; }
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<!-- ─────────────────────────────────────────────────────────
+     テキストグループ (全て position: fixed)
+     JavaScriptが progress に基づいて opacity を更新する
+───────────────────────────────────────────────────────────── -->
+
+<!-- 耀星 / hero -->
+<div class="tg" id="g-hero">
+  <p class="name-jp">耀星</p>
+  <p class="name-en">Yose &nbsp;/&nbsp; IKG Systems</p>
+  <p class="tagline">
+    Laravel &nbsp;/&nbsp; React &nbsp;/&nbsp; TypeScript &nbsp;/&nbsp; AWS<br>
+    AI を活用した開発で、課題に形を与える。
+  </p>
+</div>
+
+<!-- 水面 -->
+<div class="tg center" id="g-surface">
+  <p class="surface-text">フリーランスエンジニア<br>── 設計し、作り、深める。</p>
+</div>
+
+<!-- なぜ 1 -->
+<div class="tg" id="g-why1">
+  <p class="question">なぜ、エンジニアになったのか</p>
+  <p class="answer">技術大学から美大へ。<br>ふたつの場所を渡り歩いて、<br>「作ること」だけが変わらなかった。</p>
+</div>
+
+<!-- なぜ 2 (右寄せ) -->
+<div class="tg right" id="g-why2">
+  <p class="question">なぜ、技術に惹かれるのか</p>
+  <p class="answer">曖昧なものが、コードを通すと形になる。<br>その変換が、好きだ。</p>
+</div>
+
+<!-- なぜ 3 -->
+<div class="tg" id="g-why3" style="top:55%;">
+  <p class="question">なぜ、一人を選んだのか</p>
+  <p class="answer">自分の問いに、正直でいたかった。</p>
+</div>
+
+<!-- 深海 -->
+<div class="tg center" id="g-deep" style="top:52%;">
+  <p class="deep-text">
+    わからないことがある。<br>
+    でも今日、コードは書ける。
+  </p>
+</div>
+
+<!-- 帰還 -->
+<div class="tg" id="g-return">
+  <p class="return-title">話しかけて<br>みてください。</p>
+  <a href="mailto:yose@ikg-systems.com" class="contact-link">yose@ikg-systems.com</a>
+</div>
+
+<!-- 深度インジケーター -->
+<div id="depth-ui">
+  <div id="depth-track"><div id="depth-fill"></div></div>
+  <div id="phase-label">星空</div>
+</div>
+
+<!-- スクロールヒント -->
+<div id="scroll-hint">
+  <div id="scroll-hint-line"></div>
+  scroll
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ════════════════════════════════════════════════════════════
+//  WebGL
+// ════════════════════════════════════════════════════════════
+const canvas   = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+const uniforms = {
+  u_time:       { value: 0.0 },
+  u_progress:   { value: 0.0 },
+  u_resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
+};
+
+const vert = `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.0); }`;
+
+// シェーダー (v4から引き継ぎ、変更なし)
+const frag = `
+  precision highp float;
+  uniform float u_time;
+  uniform float u_progress;
+  uniform vec2  u_resolution;
+  varying vec2  vUv;
+
+  float hash(vec2 p){p=fract(p*vec2(234.34,435.345));p+=dot(p,p+34.23);return fract(p.x*p.y);}
+  float hash1(float n){return fract(sin(n)*43758.5453);}
+  float noise(vec2 p){vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);}
+  float fbm(vec2 p){float v=0.0,a=0.5;for(int i=0;i<5;i++){v+=a*noise(p);p=p*2.0+vec2(1.7,9.2);a*=0.5;}return v;}
+
+  float starLayer(vec2 uv,float scale,float thresh,float t){
+    vec2 id=floor(uv*scale),f=fract(uv*scale)-0.5;float h=hash(id);
+    if(h>thresh)return 0.0;
+    float sz=0.04+hash(id+vec2(7.3,2.1))*0.08;
+    float tw=0.55+0.45*sin(t*(0.7+hash(id+vec2(3.1,0.7))*2.2)+h*6.283);
+    return smoothstep(sz,sz*0.05,length(f))*tw*(0.35+h*0.65);}
+
+  vec3 starColor(vec2 id,float b){float w=hash(id+vec2(13.7,5.5));
+    return mix(vec3(0.72,0.82,1.00),vec3(0.98,0.88,0.42),step(0.55,w))*b;}
+
+  float wave(float x,float t){
+    return sin(x*7.0+t*1.1)*0.010+sin(x*13.0-t*0.8)*0.005
+          +sin(x*4.0+t*0.5)*0.016+noise(vec2(x*5.0,t*0.3))*0.008;}
+
+  float caustic(vec2 uv,float t){
+    float c=sin(uv.x*14.0+uv.y*9.0+t*1.2)*sin(uv.x*9.0-uv.y*13.0-t*0.9);
+    c+=sin((uv.x+uv.y)*11.0+t*1.0)*0.4;return max(0.0,(c+1.5)/3.0);}
+
+  float biolum(vec2 uv,float t){
+    float glow=0.0;
+    for(int i=0;i<14;i++){float fi=float(i),seed=fi*11.3+37.7;
+      vec2 pos=vec2(hash1(seed)*0.88+0.06,hash1(seed+1.0)*0.80+0.08+sin(t*(0.06+hash1(seed+2.0)*0.18)+seed)*0.03);
+      float pulse=0.15+0.85*(0.5+0.5*sin(t*(0.3+hash1(seed+3.0)*0.8)+seed*2.1));
+      float r=0.008+hash1(seed+4.0)*0.014,d=length(uv-pos);
+      glow+=pulse*exp(-d*d/(r*r));glow+=pulse*exp(-d*d/(r*r*16.0))*0.10;}
+    for(int i=0;i<5;i++){float fi=float(i),seed=fi*19.7+83.3;
+      vec2 pos=vec2(hash1(seed)*0.75+0.12+sin(t*(0.04+hash1(seed+5.0)*0.06)+seed*0.7)*0.04,
+                    hash1(seed+1.0)*0.70+0.15+sin(t*(0.03+hash1(seed+2.0)*0.05)+seed)*0.05);
+      float pulse=0.4+0.6*(0.5+0.5*sin(t*(0.15+hash1(seed+3.0)*0.3)+seed*1.3));
+      float r=0.03+hash1(seed+4.0)*0.025,d=length(uv-pos);
+      glow+=pulse*exp(-d*d/(r*r))*1.4;glow+=pulse*exp(-d*d/(r*r*35.0))*0.25;}
+    {vec2 pos=vec2(0.62+sin(t*0.018+1.5)*0.12,0.55+sin(t*0.022+3.0)*0.08);
+     float pulse=0.08+0.12*(0.5+0.5*sin(t*0.1+2.1)),d=length(uv-pos);
+     glow+=pulse*exp(-d*d/(0.08*0.08))*2.0;}
+    return min(glow,3.5);}
+
+  float lightShafts(float x,float y,float t){float s=0.0;
+    for(int i=0;i<5;i++){float fi=float(i),cx=0.14+fi*0.18+sin(t*0.22+fi*1.5)*0.04;
+      float w=0.018+0.012*sin(t*0.38+fi*0.8);s+=exp(-pow((x-cx)/w,2.0))*0.10;}
+    return s*max(0.0,1.0-y*0.9);}
+
+  void main(){
+    vec2 uv=vUv;
+    float asp=u_resolution.x/u_resolution.y;
+    vec2 uvA=vec2(uv.x*asp,uv.y);
+    float t=u_time*0.45,p=u_progress;
+
+    float depth;
+    if(p<0.42)depth=p/0.42;
+    else if(p<0.72)depth=1.0;
+    else depth=1.0-(p-0.72)/0.28;
+    depth=clamp(depth,0.0,1.0);
+
+    float horizY=0.06+depth*1.04;
+    float ripple=wave(uv.x*asp,t);
+    float waveY=horizY+ripple;
+    float dAbove=uv.y-waveY,dBelow=waveY-uv.y;
+
+    // 星空
+    vec3 skyTop=vec3(0.020,0.038,0.125),skyHoriz=vec3(0.038,0.095,0.270);
+    vec3 skyBg=mix(skyTop,skyHoriz,(1.0-uv.y)*(1.0-uv.y));
+    float nebula=max(0.0,fbm(uvA*1.5+vec2(t*0.015,0.0))-0.44)*0.18;
+    skyBg+=vec3(0.04,0.02,0.10)*nebula;
+    vec3 starField=vec3(0.0);
+    {vec2 sid=floor(uvA*11.0);starField+=starColor(sid,starLayer(uvA,11.0,0.91,t))*1.3;}
+    {vec2 sid=floor(uvA*24.0);starField+=starColor(sid,starLayer(uvA,24.0,0.87,t))*0.85;}
+    starField+=vec3(0.65,0.75,1.00)*starLayer(uvA,48.0,0.82,t)*0.45;
+    vec3 sky=skyBg+starField;
+
+    // 水中
+    float wDepth=clamp(dBelow/0.85,0.0,1.0);
+    vec3 wShallow=vec3(0.018,0.130,0.210),wMid=vec3(0.008,0.042,0.088);
+    vec3 wDeep=vec3(0.002,0.010,0.028),wAbyss=vec3(0.001,0.004,0.012);
+    vec3 waterCol;
+    if(wDepth<0.35)waterCol=mix(wShallow,wMid,wDepth/0.35);
+    else if(wDepth<0.65)waterCol=mix(wMid,wDeep,(wDepth-0.35)/0.30);
+    else waterCol=mix(wDeep,wAbyss,(wDepth-0.65)/0.35);
+    waterCol*=mix(1.0,0.22,clamp((depth-0.6)/0.4,0.0,1.0));
+    float cFade=max(0.0,1.0-wDepth*2.8);
+    waterCol+=vec3(0.05,0.15,0.22)*caustic(uvA*0.55,t*1.3)*cFade*0.65;
+    float lsFade=max(0.0,1.0-wDepth*2.0);
+    waterCol+=vec3(0.03,0.10,0.16)*lightShafts(uv.x,wDepth,t)*lsFade;
+    float plk=0.0;
+    for(int i=0;i<5;i++){float fi=float(i);
+      vec2 pp=vec2(fract(hash1(fi*7.1)+t*(0.008+hash1(fi)*0.012)),
+                   fract(hash1(fi*3.9+0.5)-t*(0.004+hash1(fi+0.2)*0.008)));
+      plk+=exp(-length(uv-pp)*length(uv-pp)/0.00015);}
+    waterCol+=vec3(0.15,0.65,0.75)*min(plk,1.0)*0.25;
+    float bioFactor=clamp((depth-0.38)/0.22,0.0,1.0);
+    float bioVal=biolum(uv,t);
+    float bioNoise=noise(uv*3.5+t*0.08);
+    vec3 bioTint=mix(mix(vec3(0.20,0.95,0.72),vec3(0.30,0.55,1.00),bioNoise),vec3(0.60,1.00,0.70),step(0.72,bioNoise));
+    waterCol+=bioTint*bioVal*bioFactor*1.1;
+    float ambientDeep=clamp((depth-0.65)/0.30,0.0,1.0);
+    waterCol+=vec3(0.04,0.22,0.35)*fbm(uv*2.0+vec2(t*0.04,t*0.03))*ambientDeep*0.5;
+
+    // 映り込み
+    float reflStrength=clamp(1.0-depth*2.8,0.0,1.0);
+    if(reflStrength>0.005){
+      float warpX=wave(uv.x*asp+0.5,t*1.3)*4.5+wave(uv.x*asp*1.7,t*0.7)*2.0;
+      vec2 reflUV=vec2(uvA.x+warpX,waveY*2.0-uvA.y);
+      float rS=starLayer(reflUV,11.0,0.91,t)*1.3+starLayer(reflUV,24.0,0.87,t)*0.85+starLayer(reflUV,48.0,0.82,t)*0.35;
+      waterCol+=vec3(0.60,0.78,1.00)*rS*reflStrength*exp(-dBelow*12.0)*0.55;}
+
+    // 合成
+    vec3 col=mix(waterCol,sky,smoothstep(-0.006,0.006,dAbove));
+    float hGlow=exp(-abs(dAbove)*55.0);
+    col=mix(col,vec3(0.07,0.42,0.58),hGlow*0.38*(1.0-depth*0.65));
+    col+=starField*max(0.0,p-0.88)/0.12*0.3;
+    vec2 vc=uv-0.5;
+    col*=1.0-dot(vc,vc)*0.48;
+    gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);}
+`;
+
+const geo = new THREE.PlaneGeometry(2, 2);
+const mat = new THREE.ShaderMaterial({ uniforms, vertexShader: vert, fragmentShader: frag });
+scene.add(new THREE.Mesh(geo, mat));
+
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  uniforms.u_resolution.value.set(window.innerWidth, window.innerHeight);
+});
+
+// ════════════════════════════════════════════════════════════
+//  仮想スクロール (Virtual Scroll)
+//
+//  ★ 無限ループの仕組み:
+//    vScroll は 0 から永遠に増え続ける数値。
+//    progress = (vScroll / CYCLE) % 1.0 で 0〜1 に折り返す。
+//    シェーダーは p=0 と p=1 で同じ視覚 (星空・depth=0) を返すので
+//    折り返しの瞬間に見た目の切れ目が一切生じない。
+// ════════════════════════════════════════════════════════════
+const CYCLE = 7000;   // ホイール1回転分のdeltaY合計でちょうど1周になるよう調整
+const LERP  = 0.040;  // 慣性係数 (小さいほど重く高級感がある)
+
+let vScroll  = 0;     // 目標の仮想スクロール量 (0 to Infinity)
+let vSmooth  = 0;     // lerp後の滑らかな値
+
+// ── マウスホイール ──────────────────────────────────────────
+window.addEventListener('wheel', (e) => {
+  vScroll += e.deltaY * 0.82;
+  vScroll  = Math.max(0, vScroll);
+  resetIdleTimer();
+}, { passive: true });
+
+// ── タッチ (スマホ対応) ───────────────────────────────────
+let touchY = 0;
+window.addEventListener('touchstart', (e) => { touchY = e.touches[0].clientY; });
+window.addEventListener('touchmove', (e) => {
+  const dy = touchY - e.touches[0].clientY;
+  vScroll += dy * 2.5;
+  vScroll  = Math.max(0, vScroll);
+  touchY   = e.touches[0].clientY;
+  resetIdleTimer();
+}, { passive: true });
+
+// ── キーボード ────────────────────────────────────────────
+window.addEventListener('keydown', (e) => {
+  const step = 300;
+  if (e.key === 'ArrowDown' || e.key === 'PageDown') { vScroll += step; resetIdleTimer(); }
+  if (e.key === 'ArrowUp'   || e.key === 'PageUp'  ) { vScroll = Math.max(0, vScroll - step); resetIdleTimer(); }
+});
+
+// ════════════════════════════════════════════════════════════
+//  テキスト透明度マップ
+//
+//  ★ 無限ループ対応の opacity 計算:
+//    progress が 0〜1 を循環するため、
+//    各テキストグループが「いつ表示されるか」を
+//    progress の範囲 (show, peak, hide) で定義する。
+//
+//    ヒーローテキスト (g-hero) は progress ≈ 0 と ≈ 1 の両側で
+//    表示されるため、±1 のシフトを確認して max を取る。
+// ════════════════════════════════════════════════════════════
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  fade with HOLD
+//
+//  show ─── フェードイン開始
+//  peakIn ─ フェードイン完了 (opacity = 1.0 に達する)
+//  peakOut ─ フェードアウト開始 (ここまで opacity = 1.0 を保持)
+//  hide ─── フェードアウト完了 (opacity = 0)
+//
+//  [show → peakIn]: 0 → 1  (フェードイン)
+//  [peakIn → peakOut]: 1.0  (ホールド ← 今回追加)
+//  [peakOut → hide]: 1 → 0  (フェードアウト)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function fade(p, show, peakIn, peakOut, hide) {
+  if (p <= show || p >= hide) return 0;
+  if (p <= peakIn)  return (p - show) / (peakIn - show);
+  if (p <= peakOut) return 1.0;
+  return 1 - (p - peakOut) / (hide - peakOut);
+}
+
+// ループ境界 (0/1) をまたぐ要素用
+function fadeCycle(p, show, peakIn, peakOut, hide) {
+  return Math.max(
+    fade(p,     show, peakIn, peakOut, hide),
+    fade(p - 1, show, peakIn, peakOut, hide),
+    fade(p + 1, show, peakIn, peakOut, hide)
+  );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  テキストグループ タイムライン
+//
+//  [show, peakIn, peakOut, hide] — 全て progress 0〜1 の値
+//
+//  ヒーローは peakOut を広めに設定し「トップに留まる感」を出す。
+//  各なぜセクションも peakIn→peakOut を十分取り、
+//  読み終わるまで表示を保つ。
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const TEXT_GROUPS = [
+  //                             show   peakIn  peakOut  hide
+  // ヒーロー: ループ両端に登場。ホールドを特に広く。
+  { id: 'g-hero',    fn: (p) => fadeCycle(p, -0.06, 0.00, 0.17, 0.22) },
+
+  // 水面
+  { id: 'g-surface', fn: (p) => fade(p,  0.18,  0.23,  0.31,  0.36) },
+
+  // なぜ 1 (左)
+  { id: 'g-why1',    fn: (p) => fade(p,  0.31,  0.36,  0.47,  0.52) },
+
+  // なぜ 2 (右) — why1 と位置が違うので overlap OK
+  { id: 'g-why2',    fn: (p) => fade(p,  0.46,  0.51,  0.61,  0.66) },
+
+  // なぜ 3 (左) — why2 と位置が違うので overlap OK
+  { id: 'g-why3',    fn: (p) => fade(p,  0.60,  0.65,  0.74,  0.79) },
+
+  // 深海テキスト (中央) — 深海滞在中ずっと。最も長いホールド。
+  // why2/why3 と位置が違う (center vs left/right) ので overlap OK
+  { id: 'g-deep',    fn: (p) => fade(p,  0.50,  0.56,  0.76,  0.82) },
+
+  // 帰還
+  { id: 'g-return',  fn: (p) => fade(p,  0.80,  0.85,  0.95,  1.00) },
+];
+
+// DOM要素をキャッシュ
+const groupEls = TEXT_GROUPS.map(g => ({
+  el: document.getElementById(g.id),
+  fn: g.fn
+}));
+
+// ── フェーズ名 ───────────────────────────────────────────
+const PHASES = [
+  { until: 0.12, label: '星空' },
+  { until: 0.28, label: '水面' },
+  { until: 0.45, label: '水中' },
+  { until: 0.78, label: '深海' },
+  { until: 0.95, label: '帰還' },
+  { until: 1.00, label: '星空' },
+];
+const phaseLabel = document.getElementById('phase-label');
+const depthFill  = document.getElementById('depth-fill');
+const depthUI    = document.getElementById('depth-ui');
+const scrollHint = document.getElementById('scroll-hint');
+
+let lastPhase = '';
+
+function getPhaseLabel(p) {
+  for (const ph of PHASES) if (p < ph.until) return ph.label;
+  return '星空';
+}
+
+// depth 計算 (シェーダーと同じロジック)
+function getDepth(p) {
+  if (p < 0.42) return p / 0.42;
+  if (p < 0.72) return 1.0;
+  return 1.0 - (p - 0.72) / 0.28;
+}
+
+// ── アイドル検知 (スクロールヒントの表示) ──────────────
+let idleTimer;
+function resetIdleTimer() {
+  scrollHint.style.opacity = '0';
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    scrollHint.style.opacity = '1';
+  }, 3500);
+}
+
+// ════════════════════════════════════════════════════════════
+//  RAF ループ
+//  毎フレーム: lerp → progress → シェーダー + テキスト更新
+// ════════════════════════════════════════════════════════════
+function tick(ms) {
+  // lerp: vSmoothをvScrollに近づける (慣性の実装)
+  vSmooth += (vScroll - vSmooth) * LERP;
+
+  // 0〜1 に正規化 (modulo)
+  const raw      = vSmooth / CYCLE;
+  const progress = raw - Math.floor(raw);  // 常に 0.0〜1.0
+
+  // シェーダーに渡す
+  uniforms.u_time.value     = ms * 0.001;
+  uniforms.u_progress.value = progress;
+
+  // テキストグループの opacity 更新
+  groupEls.forEach(({ el, fn }) => {
+    const op = fn(progress);
+    // blur も opacity に連動させる
+    el.style.opacity = op;
+    el.style.filter  = op < 0.99 ? `blur(${(1 - op) * 9}px)` : 'none';
+  });
+
+  // 深度インジケーター
+  const depth = getDepth(progress);
+  depthFill.style.height = (depth * 100).toFixed(1) + '%';
+
+  const phase = getPhaseLabel(progress);
+  if (phase !== lastPhase) {
+    phaseLabel.textContent = phase;
+    lastPhase = phase;
+  }
+
+  // インジケーターの表示 (星空以外で表示)
+  const showUI = depth > 0.04;
+  depthUI.classList.toggle('visible', showUI);
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+
+// ── 初期化 ──────────────────────────────────────────────────
+// ヒーローテキストを最初から表示
+document.getElementById('g-hero').style.opacity = '1';
+document.getElementById('g-hero').style.filter  = 'none';
+
+// スクロールヒント: 最初は3秒後に表示
+setTimeout(() => { scrollHint.style.opacity = '1'; }, 3500);
+
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
