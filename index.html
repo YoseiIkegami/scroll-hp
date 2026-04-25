@@ -297,7 +297,6 @@ const uniforms = {
 
 const vert = `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position,1.0); }`;
 
-// シェーダー (v4から引き継ぎ、変更なし)
 const frag = `
   precision highp float;
   uniform float u_time;
@@ -305,52 +304,42 @@ const frag = `
   uniform vec2  u_resolution;
   varying vec2  vUv;
 
+  // ─── ユーティリティ ────────────────────────────────────────
   float hash(vec2 p){p=fract(p*vec2(234.34,435.345));p+=dot(p,p+34.23);return fract(p.x*p.y);}
   float hash1(float n){return fract(sin(n)*43758.5453);}
-  float noise(vec2 p){vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
-    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);}
-  float fbm(vec2 p){float v=0.0,a=0.5;for(int i=0;i<5;i++){v+=a*noise(p);p=p*2.0+vec2(1.7,9.2);a*=0.5;}return v;}
+  float noise(vec2 p){
+    vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),
+               mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);}
+  float fbm(vec2 p){float v=0.0,a=0.5;
+    for(int i=0;i<5;i++){v+=a*noise(p);p=p*2.0+vec2(1.7,9.2);a*=0.5;}return v;}
+  float wave(float x,float t){
+    return sin(x*7.0+t*1.1)*0.010+sin(x*13.0-t*0.8)*0.005
+          +sin(x*4.0+t*0.5)*0.016+noise(vec2(x*5.0,t*0.3))*0.008;}
+  float caustic(vec2 uv,float t){
+    float c=sin(uv.x*14.0+uv.y*9.0+t*1.2)*sin(uv.x*9.0-uv.y*13.0-t*0.9);
+    c+=sin((uv.x+uv.y)*11.0+t*1.0)*0.4;return max(0.0,(c+1.5)/3.0);}
+  float lightShafts(float x,float y,float t){float s=0.0;
+    for(int i=0;i<5;i++){float fi=float(i),cx=0.14+fi*0.18+sin(t*0.22+fi*1.5)*0.04;
+      float w=0.018+0.012*sin(t*0.38+fi*0.8);s+=exp(-pow((x-cx)/w,2.0))*0.10;}
+    return s*max(0.0,1.0-y*0.9);}
 
+  // ─── 三日月 SDF ────────────────────────────────────────────
+  // 大円の内側 かつ 小円(shift分ずれた)の外側 = 三日月
+  float crescentMask(vec2 uvA,vec2 center,float r1,float r2,vec2 shift){
+    float d1=r1-length(uvA-center);
+    float d2=length(uvA-(center+shift))-r2;
+    return smoothstep(-0.003,0.003,d1)*smoothstep(-0.003,0.003,d2);}
+
+  // ─── 星 ────────────────────────────────────────────────────
   float starLayer(vec2 uv,float scale,float thresh,float t){
     vec2 id=floor(uv*scale),f=fract(uv*scale)-0.5;float h=hash(id);
     if(h>thresh)return 0.0;
     float sz=0.04+hash(id+vec2(7.3,2.1))*0.08;
     float tw=0.55+0.45*sin(t*(0.7+hash(id+vec2(3.1,0.7))*2.2)+h*6.283);
     return smoothstep(sz,sz*0.05,length(f))*tw*(0.35+h*0.65);}
-
   vec3 starColor(vec2 id,float b){float w=hash(id+vec2(13.7,5.5));
     return mix(vec3(0.72,0.82,1.00),vec3(0.98,0.88,0.42),step(0.55,w))*b;}
-
-  float wave(float x,float t){
-    return sin(x*7.0+t*1.1)*0.010+sin(x*13.0-t*0.8)*0.005
-          +sin(x*4.0+t*0.5)*0.016+noise(vec2(x*5.0,t*0.3))*0.008;}
-
-  float caustic(vec2 uv,float t){
-    float c=sin(uv.x*14.0+uv.y*9.0+t*1.2)*sin(uv.x*9.0-uv.y*13.0-t*0.9);
-    c+=sin((uv.x+uv.y)*11.0+t*1.0)*0.4;return max(0.0,(c+1.5)/3.0);}
-
-  float biolum(vec2 uv,float t){
-    float glow=0.0;
-    for(int i=0;i<14;i++){float fi=float(i),seed=fi*11.3+37.7;
-      vec2 pos=vec2(hash1(seed)*0.88+0.06,hash1(seed+1.0)*0.80+0.08+sin(t*(0.06+hash1(seed+2.0)*0.18)+seed)*0.03);
-      float pulse=0.15+0.85*(0.5+0.5*sin(t*(0.3+hash1(seed+3.0)*0.8)+seed*2.1));
-      float r=0.008+hash1(seed+4.0)*0.014,d=length(uv-pos);
-      glow+=pulse*exp(-d*d/(r*r));glow+=pulse*exp(-d*d/(r*r*16.0))*0.10;}
-    for(int i=0;i<5;i++){float fi=float(i),seed=fi*19.7+83.3;
-      vec2 pos=vec2(hash1(seed)*0.75+0.12+sin(t*(0.04+hash1(seed+5.0)*0.06)+seed*0.7)*0.04,
-                    hash1(seed+1.0)*0.70+0.15+sin(t*(0.03+hash1(seed+2.0)*0.05)+seed)*0.05);
-      float pulse=0.4+0.6*(0.5+0.5*sin(t*(0.15+hash1(seed+3.0)*0.3)+seed*1.3));
-      float r=0.03+hash1(seed+4.0)*0.025,d=length(uv-pos);
-      glow+=pulse*exp(-d*d/(r*r))*1.4;glow+=pulse*exp(-d*d/(r*r*35.0))*0.25;}
-    {vec2 pos=vec2(0.62+sin(t*0.018+1.5)*0.12,0.55+sin(t*0.022+3.0)*0.08);
-     float pulse=0.08+0.12*(0.5+0.5*sin(t*0.1+2.1)),d=length(uv-pos);
-     glow+=pulse*exp(-d*d/(0.08*0.08))*2.0;}
-    return min(glow,3.5);}
-
-  float lightShafts(float x,float y,float t){float s=0.0;
-    for(int i=0;i<5;i++){float fi=float(i),cx=0.14+fi*0.18+sin(t*0.22+fi*1.5)*0.04;
-      float w=0.018+0.012*sin(t*0.38+fi*0.8);s+=exp(-pow((x-cx)/w,2.0))*0.10;}
-    return s*max(0.0,1.0-y*0.9);}
 
   void main(){
     vec2 uv=vUv;
@@ -358,70 +347,181 @@ const frag = `
     vec2 uvA=vec2(uv.x*asp,uv.y);
     float t=u_time*0.45,p=u_progress;
 
+    // ─── depth マッピング ─────────────────────────────────
+    // p=0.00→0.35: 降下 (0→1)
+    // p=0.35→0.75: 深海に留まる (1)
+    // p=0.75→1.00: 浮上 (1→0)
     float depth;
-    if(p<0.42)depth=p/0.42;
-    else if(p<0.72)depth=1.0;
-    else depth=1.0-(p-0.72)/0.28;
+    if(p<0.35)       depth=p/0.35;
+    else if(p<0.75)  depth=1.0;
+    else             depth=1.0-(p-0.75)/0.25;
     depth=clamp(depth,0.0,1.0);
 
+    // ─── 水面 ─────────────────────────────────────────────
     float horizY=0.06+depth*1.04;
     float ripple=wave(uv.x*asp,t);
     float waveY=horizY+ripple;
     float dAbove=uv.y-waveY,dBelow=waveY-uv.y;
 
-    // 星空
-    vec3 skyTop=vec3(0.020,0.038,0.125),skyHoriz=vec3(0.038,0.095,0.270);
-    vec3 skyBg=mix(skyTop,skyHoriz,(1.0-uv.y)*(1.0-uv.y));
-    float nebula=max(0.0,fbm(uvA*1.5+vec2(t*0.015,0.0))-0.44)*0.18;
-    skyBg+=vec3(0.04,0.02,0.10)*nebula;
+    // ─── 三日月 ───────────────────────────────────────────
+    // depth=0: 月は高位置(y=0.90)
+    // depth≈0.56: 月が水面に到達(p≈0.20), 以後水没
+    // depth=0.56→1.0: waveY > moonY なので moonAbove=0
+    float moonY     = 0.90-depth*0.46;
+    vec2  moonCenter= vec2(asp*0.62,moonY);
+    float moonR1    = 0.080;
+    float moonR2    = 0.064;
+    vec2  moonShift = vec2(0.025,0.005);
+    float moonDist  = length(uvA-moonCenter);
+    float moonMask  = crescentMask(uvA,moonCenter,moonR1,moonR2,moonShift);
+    float moonGlow1 = exp(-moonDist*moonDist/(0.030*0.030))*0.52;
+    float moonGlow2 = exp(-moonDist*moonDist/(0.150*0.150))*0.09;
+    // 水面より上のピクセルのみ月を表示
+    float moonAbove = smoothstep(0.0,0.04,moonY-waveY);
+    vec3  moonColor = vec3(0.96,0.91,0.69);
+
+    // ─── 星空 ─────────────────────────────────────────────
+    vec3 skyTop  =vec3(0.012,0.022,0.090);
+    vec3 skyHoriz=vec3(0.030,0.070,0.210);
+    vec3 skyBg   =mix(skyTop,skyHoriz,(1.0-uv.y)*(1.0-uv.y));
+    float nebula =max(0.0,fbm(uvA*1.5+vec2(t*0.015,0.0))-0.44)*0.16;
+    skyBg+=vec3(0.035,0.018,0.090)*nebula;
     vec3 starField=vec3(0.0);
-    {vec2 sid=floor(uvA*11.0);starField+=starColor(sid,starLayer(uvA,11.0,0.91,t))*1.3;}
-    {vec2 sid=floor(uvA*24.0);starField+=starColor(sid,starLayer(uvA,24.0,0.87,t))*0.85;}
-    starField+=vec3(0.65,0.75,1.00)*starLayer(uvA,48.0,0.82,t)*0.45;
+    {vec2 sid=floor(uvA*11.0);starField+=starColor(sid,starLayer(uvA,11.0,0.91,t))*1.25;}
+    {vec2 sid=floor(uvA*24.0);starField+=starColor(sid,starLayer(uvA,24.0,0.87,t))*0.80;}
+    starField+=vec3(0.65,0.75,1.00)*starLayer(uvA,48.0,0.82,t)*0.42;
+    // 天空に月を合成
     vec3 sky=skyBg+starField;
+    sky+=(moonColor*moonMask*1.35
+         +moonColor*moonGlow1
+         +moonColor*0.55*moonGlow2)*moonAbove;
 
-    // 水中
+    // ─── 水中グラデーション ────────────────────────────────
+    // 浅瀬→中層→深海→深淵 の4段階 + depth で全体を暗転
     float wDepth=clamp(dBelow/0.85,0.0,1.0);
-    vec3 wShallow=vec3(0.018,0.130,0.210),wMid=vec3(0.008,0.042,0.088);
-    vec3 wDeep=vec3(0.002,0.010,0.028),wAbyss=vec3(0.001,0.004,0.012);
+    vec3 wShallow=vec3(0.020,0.180,0.350);
+    vec3 wMid    =vec3(0.010,0.060,0.180);
+    vec3 wDeep   =vec3(0.002,0.008,0.035);
+    vec3 wAbyss  =vec3(0.001,0.003,0.012);
     vec3 waterCol;
-    if(wDepth<0.35)waterCol=mix(wShallow,wMid,wDepth/0.35);
-    else if(wDepth<0.65)waterCol=mix(wMid,wDeep,(wDepth-0.35)/0.30);
-    else waterCol=mix(wDeep,wAbyss,(wDepth-0.65)/0.35);
-    waterCol*=mix(1.0,0.22,clamp((depth-0.6)/0.4,0.0,1.0));
+    if(wDepth<0.35)      waterCol=mix(wShallow,wMid,   wDepth/0.35);
+    else if(wDepth<0.65) waterCol=mix(wMid,    wDeep,  (wDepth-0.35)/0.30);
+    else                 waterCol=mix(wDeep,   wAbyss, (wDepth-0.65)/0.35);
+    // 深海フェーズで暗転
+    waterCol*=mix(1.0,0.14,clamp((depth-0.55)/0.45,0.0,1.0));
+    // caustic
     float cFade=max(0.0,1.0-wDepth*2.8);
-    waterCol+=vec3(0.05,0.15,0.22)*caustic(uvA*0.55,t*1.3)*cFade*0.65;
+    waterCol+=vec3(0.045,0.145,0.220)*caustic(uvA*0.55,t*1.3)*cFade*0.60;
+    // 光のシャフト
     float lsFade=max(0.0,1.0-wDepth*2.0);
-    waterCol+=vec3(0.03,0.10,0.16)*lightShafts(uv.x,wDepth,t)*lsFade;
-    float plk=0.0;
-    for(int i=0;i<5;i++){float fi=float(i);
-      vec2 pp=vec2(fract(hash1(fi*7.1)+t*(0.008+hash1(fi)*0.012)),
-                   fract(hash1(fi*3.9+0.5)-t*(0.004+hash1(fi+0.2)*0.008)));
-      plk+=exp(-length(uv-pp)*length(uv-pp)/0.00015);}
-    waterCol+=vec3(0.15,0.65,0.75)*min(plk,1.0)*0.25;
-    float bioFactor=clamp((depth-0.38)/0.22,0.0,1.0);
-    float bioVal=biolum(uv,t);
-    float bioNoise=noise(uv*3.5+t*0.08);
-    vec3 bioTint=mix(mix(vec3(0.20,0.95,0.72),vec3(0.30,0.55,1.00),bioNoise),vec3(0.60,1.00,0.70),step(0.72,bioNoise));
-    waterCol+=bioTint*bioVal*bioFactor*1.1;
-    float ambientDeep=clamp((depth-0.65)/0.30,0.0,1.0);
-    waterCol+=vec3(0.04,0.22,0.35)*fbm(uv*2.0+vec2(t*0.04,t*0.03))*ambientDeep*0.5;
+    waterCol+=vec3(0.030,0.100,0.180)*lightShafts(uv.x,wDepth,t)*lsFade;
 
-    // 映り込み
-    float reflStrength=clamp(1.0-depth*2.8,0.0,1.0);
+    // ─── 泡: 通常 (p=0.38〜0.80) ─────────────────────────
+    float bubbleFactor=smoothstep(0.38,0.43,p)*(1.0-smoothstep(0.78,0.83,p));
+    float bubbles=0.0;
+    for(int i=0;i<16;i++){
+      float fi=float(i),sd=fi*13.7+5.3;
+      float xb=hash1(sd)*0.85+0.075;
+      float spd=0.05+hash1(sd+1.0)*0.08;
+      float ph=hash1(sd+2.0)*6.283;
+      float r=0.005+hash1(sd+3.0)*0.018;
+      float yp=fract(hash1(sd+4.0)+t*spd);
+      float xp=xb+sin(t*1.5+ph)*0.025;
+      float d=length(uvA-vec2(xp*asp,yp));
+      float dr=d-r;
+      float ring=exp(-(dr*dr)*2500.0);
+      float fd=smoothstep(0.0,0.08,yp)*smoothstep(1.0,0.85,yp);
+      bubbles+=ring*fd;}
+    waterCol+=vec3(0.50,0.78,1.00)*clamp(bubbles*bubbleFactor,0.0,2.5)*0.35;
+
+    // ─── 泡: バースト (p=0.78〜0.90) ─────────────────────
+    // 一気に浮上する大量の泡、速度3〜4倍、大小混在
+    float burstFactor=smoothstep(0.78,0.82,p)*(1.0-smoothstep(0.88,0.92,p));
+    float burstBubbles=0.0;
+    for(int i=0;i<48;i++){
+      float fi=float(i),sd=fi*7.3+91.1;
+      float xb=hash1(sd)*0.90+0.05;
+      float spd=0.18+hash1(sd+1.0)*0.25;
+      float ph=hash1(sd+2.0)*6.283;
+      float r=0.003+hash1(sd+3.0)*0.025;
+      float yp=fract(hash1(sd+4.0)+t*spd);
+      float xp=xb+sin(t*2.0+ph)*0.035;
+      float d=length(uvA-vec2(xp*asp,yp));
+      float dr=d-r;
+      float ring=exp(-(dr*dr)*3333.0);
+      float fd=smoothstep(0.0,0.08,yp)*smoothstep(1.0,0.80,yp);
+      burstBubbles+=ring*fd;}
+    waterCol+=vec3(0.55,0.82,1.00)*clamp(burstBubbles*burstFactor,0.0,5.0)*0.40;
+
+    // ─── 水面突入スプラッシュ (p=0.33〜0.44) ─────────────
+    float splashF=smoothstep(0.33,0.37,p)*(1.0-smoothstep(0.40,0.44,p));
+    float splash=0.0;
+    for(int i=0;i<20;i++){
+      float fi=float(i),sd=fi*17.3+43.7;
+      float xp=hash1(sd)*asp;
+      float yp=horizY-hash1(sd+1.0)*0.12;
+      float r2=0.004+hash1(sd+2.0)*0.012;
+      float an=0.5+0.5*sin(t*(2.0+hash1(sd+3.0)*3.0)+sd);
+      float d=length(uvA-vec2(xp,yp));
+      splash+=exp(-(d*d)/(r2*r2))*an;}
+    waterCol+=vec3(0.72,0.88,1.00)*clamp(splash*splashF,0.0,2.0)*0.45;
+    sky     +=vec3(0.72,0.88,1.00)*clamp(splash*splashF,0.0,2.0)*0.22;
+
+    // ─── 深海魚の目 (p=0.60〜0.80) ───────────────────────
+    float eyeFactor=smoothstep(0.60,0.67,p)*(1.0-smoothstep(0.75,0.82,p));
+    // ゆっくり上下にゆれ、周期8〜12秒で瞬き
+    float blink    =0.5+0.5*sin(t*0.38+1.5);
+    float eyeSwayY =sin(t*0.22+0.7)*0.032;
+    vec2  eyeL=vec2(asp*0.55,0.30+eyeSwayY);
+    vec2  eyeR=vec2(asp*0.68,0.30+eyeSwayY);
+    float eyeR0=0.022;
+    float dEL=length(uvA-eyeL);
+    float dER=length(uvA-eyeR);
+    // 虹彩グロー (不気味な黄緑)
+    float irisL=exp(-dEL*dEL/(eyeR0*eyeR0));
+    float irisR=exp(-dER*dER/(eyeR0*eyeR0));
+    waterCol+=vec3(0.40,0.82,0.10)*(irisL+irisR)*blink*eyeFactor*1.8;
+    // 外側のにじみ
+    float glowL=exp(-dEL*dEL/(0.065*0.065));
+    float glowR=exp(-dER*dER/(0.065*0.065));
+    waterCol+=vec3(0.18,0.42,0.06)*(glowL+glowR)*blink*eyeFactor*0.45;
+    // 瞳孔: 縦長楕円SDF (y方向を 0.35倍に潰す)
+    vec2 pOL=uvA-eyeL; pOL.y*=0.35;
+    vec2 pOR=uvA-eyeR; pOR.y*=0.35;
+    float pR=0.010;
+    float pML=1.0-smoothstep(pR*0.80,pR*1.20,length(pOL));
+    float pMR=1.0-smoothstep(pR*0.80,pR*1.20,length(pOR));
+    waterCol*=1.0-(pML+pMR)*eyeFactor*blink*0.88;
+
+    // ─── 映り込み ─────────────────────────────────────────
+    // 水面が近い(depth小)ときのみ映り込みを表示
+    float reflStrength=clamp(1.0-depth*3.0,0.0,1.0);
     if(reflStrength>0.005){
       float warpX=wave(uv.x*asp+0.5,t*1.3)*4.5+wave(uv.x*asp*1.7,t*0.7)*2.0;
-      vec2 reflUV=vec2(uvA.x+warpX,waveY*2.0-uvA.y);
-      float rS=starLayer(reflUV,11.0,0.91,t)*1.3+starLayer(reflUV,24.0,0.87,t)*0.85+starLayer(reflUV,48.0,0.82,t)*0.35;
-      waterCol+=vec3(0.60,0.78,1.00)*rS*reflStrength*exp(-dBelow*12.0)*0.55;}
+      vec2 reflUVA=vec2(uvA.x+warpX,waveY*2.0-uvA.y);
+      // 星の映り込み
+      float rS=starLayer(reflUVA,11.0,0.91,t)*1.25
+              +starLayer(reflUVA,24.0,0.87,t)*0.80
+              +starLayer(reflUVA,48.0,0.82,t)*0.32;
+      waterCol+=vec3(0.55,0.72,1.00)*rS*reflStrength*exp(-dBelow*12.0)*0.48;
+      // 月の映り込み (waveYを軸に反転した位置に月を描画)
+      vec2  reflMoonC=vec2(moonCenter.x,waveY*2.0-moonCenter.y);
+      float reflMoonM=crescentMask(reflUVA,reflMoonC,moonR1,moonR2,moonShift);
+      float reflMoonD=length(reflUVA-reflMoonC);
+      float reflMoonG=exp(-reflMoonD*reflMoonD/(0.055*0.055))*0.28;
+      waterCol+=(moonColor*reflMoonM*0.55+moonColor*reflMoonG)
+               *reflStrength*exp(-dBelow*8.0)*moonAbove;}
 
-    // 合成
+    // ─── 合成 ─────────────────────────────────────────────
     vec3 col=mix(waterCol,sky,smoothstep(-0.006,0.006,dAbove));
+    // 水面グロー
     float hGlow=exp(-abs(dAbove)*55.0);
-    col=mix(col,vec3(0.07,0.42,0.58),hGlow*0.38*(1.0-depth*0.65));
-    col+=starField*max(0.0,p-0.88)/0.12*0.3;
+    col=mix(col,vec3(0.05,0.36,0.54),hGlow*0.35*(1.0-depth*0.60));
+    // 帰還時: 星を強調
+    col+=starField*max(0.0,p-0.88)/0.12*0.28;
+    // ビネット
     vec2 vc=uv-0.5;
-    col*=1.0-dot(vc,vc)*0.48;
+    col*=1.0-dot(vc,vc)*0.50;
     gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);}
 `;
 
@@ -555,12 +655,13 @@ const groupEls = TEXT_GROUPS.map(g => ({
 
 // ── フェーズ名 ───────────────────────────────────────────
 const PHASES = [
-  { until: 0.12, label: '星空' },
-  { until: 0.28, label: '水面' },
-  { until: 0.45, label: '水中' },
+  { until: 0.20, label: '夜空' },
+  { until: 0.35, label: '水面へ' },
+  { until: 0.45, label: '突入' },
+  { until: 0.65, label: '水中' },
   { until: 0.78, label: '深海' },
-  { until: 0.95, label: '帰還' },
-  { until: 1.00, label: '星空' },
+  { until: 0.90, label: '浮上' },
+  { until: 1.00, label: '夜空' },
 ];
 const phaseLabel = document.getElementById('phase-label');
 const depthFill  = document.getElementById('depth-fill');
@@ -576,9 +677,9 @@ function getPhaseLabel(p) {
 
 // depth 計算 (シェーダーと同じロジック)
 function getDepth(p) {
-  if (p < 0.42) return p / 0.42;
-  if (p < 0.72) return 1.0;
-  return 1.0 - (p - 0.72) / 0.28;
+  if (p < 0.35) return p / 0.35;
+  if (p < 0.75) return 1.0;
+  return 1.0 - (p - 0.75) / 0.25;
 }
 
 // ── アイドル検知 (スクロールヒントの表示) ──────────────
